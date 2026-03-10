@@ -86,7 +86,8 @@ module.exports = async function handler(req, res) {
         .filter(w => w.length > 2 && !stopWords.includes(w.toLowerCase()));
 
       if (searchTerms.length > 0) {
-        // Search for any player whose name contains any of the search terms
+        // Try matching with all name-like terms combined (names are "Last, First")
+        // Try both "first last" and "last first" orderings
         const namePattern = '%' + searchTerms.join('%') + '%';
         mentionedPlayers = await sql`
           SELECT * FROM players
@@ -94,7 +95,17 @@ module.exports = async function handler(req, res) {
           LIMIT 5
         `;
 
-        // If exact multi-word match failed, try individual terms
+        // Also try reversed order (user says "Kenneth Harris" but DB has "Harris, Kenneth")
+        if (mentionedPlayers.length === 0 && searchTerms.length >= 2) {
+          const reversedPattern = '%' + [...searchTerms].reverse().join('%') + '%';
+          mentionedPlayers = await sql`
+            SELECT * FROM players
+            WHERE LOWER(name) LIKE LOWER(${reversedPattern})
+            LIMIT 5
+          `;
+        }
+
+        // If multi-word match failed, try individual terms — but prefer matches that hit multiple terms
         if (mentionedPlayers.length === 0) {
           for (const term of searchTerms) {
             if (term.length >= 3 && !stopWords.includes(term.toLowerCase())) {
@@ -105,7 +116,20 @@ module.exports = async function handler(req, res) {
                 LIMIT 5
               `;
               if (found.length > 0) {
-                mentionedPlayers = found;
+                // If we have multiple search terms and multiple matches,
+                // try to narrow down to players matching the most terms
+                if (searchTerms.length >= 2 && found.length > 1) {
+                  const scored = found.map(p => {
+                    const nameLower = (p.name || '').toLowerCase();
+                    const hits = searchTerms.filter(t => nameLower.includes(t.toLowerCase())).length;
+                    return { player: p, hits };
+                  });
+                  const maxHits = Math.max(...scored.map(s => s.hits));
+                  const bestMatches = scored.filter(s => s.hits === maxHits).map(s => s.player);
+                  mentionedPlayers = bestMatches;
+                } else {
+                  mentionedPlayers = found;
+                }
                 break;
               }
             }
