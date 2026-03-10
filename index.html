@@ -3876,13 +3876,6 @@
 
     setPlayerContext(player) {
       this.playerContext = player;
-      const el = document.getElementById('nc-player-ctx');
-      if (player) {
-        el.textContent = 'Viewing: ' + player.name + ' | Clutch: ' + player.clutchFactor + ' | Fit: ' + player.fitScore + '%';
-        el.classList.add('active');
-      } else {
-        el.classList.remove('active');
-      }
     },
 
     sendOption(text) {
