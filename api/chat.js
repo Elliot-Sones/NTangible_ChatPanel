@@ -276,7 +276,7 @@ module.exports = async function handler(req, res) {
       chunksUsed: chunks.map(c => ({ id: c.id, title: c.title, category: c.category })),
     });
   } catch (error) {
-    console.error('Chat error:', error);
-    return res.status(500).json({ error: error.message });
+    console.error('Chat error:', error.message, error.stack);
+    return res.status(500).json({ error: error.message, source: error.constructor?.name || 'unknown' });
   }
 };
