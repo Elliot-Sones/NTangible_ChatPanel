@@ -3645,13 +3645,10 @@
     _lastCtxDesc: '',
 
     init() {
-      this.sessionId = localStorage.getItem('nc-session-id');
-      if (!this.sessionId) {
-        this.sessionId = 'sess-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
-        localStorage.setItem('nc-session-id', this.sessionId);
-      }
+      // Always start with a fresh session
+      this.sessionId = 'sess-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
+      localStorage.setItem('nc-session-id', this.sessionId);
       this.initResize();
-      this.loadHistory();
       this.syncPlayers();
       setInterval(() => this.updateContextBar(), 1000);
     },
