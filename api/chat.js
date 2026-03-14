@@ -1,6 +1,6 @@
 const Anthropic = require('@anthropic-ai/sdk');
 const { getDb } = require('../lib/db');
-const { buildSystemPrompt, generateQuickReplies, generateVisualizations } = require('../lib/system-prompt');
+const { buildSystemPrompt, generateQuickReplies } = require('../lib/system-prompt');
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -232,16 +232,6 @@ module.exports = async function handler(req, res) {
       assistantMessage,
     });
 
-    // Generate inline visualizations server-side
-    const visualizations = generateVisualizations({
-      playerData,
-      mentionedPlayers,
-      visiblePlayers: Array.isArray(visiblePlayers) ? visiblePlayers : [],
-      viewContext,
-      assistantMessage,
-      userMessage: message,
-    });
-
     // 7. Store user + assistant messages in conversations
     const chunksUsedIds = chunks.map(c => c.id);
     await sql`
@@ -272,7 +262,6 @@ module.exports = async function handler(req, res) {
       message: assistantMessage,
       videos,
       options,
-      visualizations,
       chunksUsed: chunks.map(c => ({ id: c.id, title: c.title, category: c.category })),
     });
   } catch (error) {
