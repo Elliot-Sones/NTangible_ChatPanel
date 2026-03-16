@@ -1,6 +1,7 @@
 const Anthropic = require('@anthropic-ai/sdk');
 const { getDb } = require('../lib/db');
 const { buildSystemPrompt, generateQuickReplies } = require('../lib/system-prompt');
+const { embedQuery } = require('../lib/embeddings');
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -18,26 +19,19 @@ module.exports = async function handler(req, res) {
   const sql = getDb();
 
   try {
-    // 1. Full-text search knowledge_chunks — extract keywords and use OR logic for broader matching
+    // 1. Vector similarity search — embed user message and find closest knowledge chunks
     const stopWords = ['the','and','for','how','what','who','why','when','with','this','that','from','are','was','were','have','has','been','can','will','should','about','their','them','they','does','also','into','tell','know','me','you','your','his','her','him','she','keep','keeps','making','player','please','could','would'];
-    const words = message
-      .toLowerCase()
-      .replace(/[^a-z0-9\s]/g, '')
-      .split(/\s+/)
-      .filter(w => w.length > 2 && !stopWords.includes(w));
-    const tsquery = words.length > 0 ? words.join(' | ') : null;
 
-    let chunks = [];
-    if (tsquery) {
-      chunks = await sql`
-        SELECT id, category, subcategory, title, content, metadata,
-               ts_rank(tsv, to_tsquery('english', ${tsquery})) AS rank
-        FROM knowledge_chunks
-        WHERE tsv @@ to_tsquery('english', ${tsquery})
-        ORDER BY rank DESC
-        LIMIT 5
-      `;
-    }
+    const queryEmbedding = await embedQuery(message);
+    const vecString = `[${queryEmbedding.join(',')}]`;
+    const chunks = await sql`
+      SELECT id, category, subcategory, title, content, metadata,
+             1 - (embedding <=> ${vecString}::vector) AS similarity
+      FROM knowledge_chunks
+      WHERE embedding IS NOT NULL
+      ORDER BY embedding <=> ${vecString}::vector
+      LIMIT 5
+    `;
 
     // 2. Fetch last 10 conversation messages for context
     const history = await sql`

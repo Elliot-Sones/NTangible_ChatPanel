@@ -1,5 +1,6 @@
 const { getDb } = require('../lib/db');
 const { knowledgeChunks } = require('../lib/knowledge-chunks');
+const { embedTexts } = require('../lib/embeddings');
 
 module.exports = async function handler(req, res) {
   if (req.method !== 'POST') {
@@ -14,6 +15,9 @@ module.exports = async function handler(req, res) {
   const sql = getDb();
 
   try {
+    // Enable pgvector extension
+    await sql`CREATE EXTENSION IF NOT EXISTS vector`;
+
     // Create tables
     await sql`
       CREATE TABLE IF NOT EXISTS knowledge_chunks (
@@ -24,12 +28,14 @@ module.exports = async function handler(req, res) {
         content       TEXT NOT NULL,
         metadata      JSONB DEFAULT '{}',
         tsv           tsvector GENERATED ALWAYS AS (to_tsvector('english', title || ' ' || content)) STORED,
+        embedding     VECTOR(1024),
         created_at    TIMESTAMPTZ DEFAULT NOW()
       )
     `;
 
     await sql`CREATE INDEX IF NOT EXISTS idx_kc_tsv ON knowledge_chunks USING gin(tsv)`;
     await sql`CREATE INDEX IF NOT EXISTS idx_kc_category ON knowledge_chunks (category)`;
+    await sql`CREATE INDEX IF NOT EXISTS idx_kc_embedding ON knowledge_chunks USING hnsw (embedding vector_cosine_ops)`;
 
     await sql`
       CREATE TABLE IF NOT EXISTS players (
@@ -83,9 +89,32 @@ module.exports = async function handler(req, res) {
       `;
     }
 
+    // Batch-embed all chunks via Voyage AI and update the embedding column
+    const textsToEmbed = knowledgeChunks.map(c => `${c.title}\n${c.content}`);
+
+    // Voyage API supports up to 128 texts per call; batch in groups of 100
+    const BATCH_SIZE = 100;
+    const allEmbeddings = [];
+    for (let i = 0; i < textsToEmbed.length; i += BATCH_SIZE) {
+      const batch = textsToEmbed.slice(i, i + BATCH_SIZE);
+      const batchEmbeddings = await embedTexts(batch, 'document');
+      allEmbeddings.push(...batchEmbeddings);
+    }
+
+    // Update each chunk with its embedding
+    for (let i = 0; i < allEmbeddings.length; i++) {
+      const vecString = `[${allEmbeddings[i].join(',')}]`;
+      await sql`
+        UPDATE knowledge_chunks
+        SET embedding = ${vecString}::vector
+        WHERE id = ${i + 1}
+      `;
+    }
+
     return res.status(200).json({
       success: true,
-      chunksInserted: knowledgeChunks.length
+      chunksInserted: knowledgeChunks.length,
+      chunksEmbedded: allEmbeddings.length,
     });
   } catch (error) {
     console.error('Seed error:', error);
