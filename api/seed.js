@@ -33,6 +33,14 @@ module.exports = async function handler(req, res) {
       )
     `;
 
+    // Add embedding column if migrating from an existing table
+    await sql`
+      DO $$ BEGIN
+        ALTER TABLE knowledge_chunks ADD COLUMN IF NOT EXISTS embedding VECTOR(1024);
+      EXCEPTION WHEN duplicate_column THEN NULL;
+      END $$
+    `;
+
     await sql`CREATE INDEX IF NOT EXISTS idx_kc_tsv ON knowledge_chunks USING gin(tsv)`;
     await sql`CREATE INDEX IF NOT EXISTS idx_kc_category ON knowledge_chunks (category)`;
     await sql`CREATE INDEX IF NOT EXISTS idx_kc_embedding ON knowledge_chunks USING hnsw (embedding vector_cosine_ops)`;
