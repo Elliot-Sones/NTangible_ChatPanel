@@ -835,7 +835,7 @@
                 const times = ['2 days ago', '6 days ago', 'a week ago', '2 weeks ago', 'a month ago', '2 months ago'];
                 const time = times[Math.floor(rng() * times.length)];
                 const labelRand = rng();
-                const commitmentLabel = labelRand > 0.78 ? 'Signed' : labelRand > 0.45 ? 'Offered' : 'Uncommitted';
+                const commitmentLabel = p.commitmentLabel || (labelRand > 0.78 ? 'Signed' : labelRand > 0.45 ? 'Offered' : 'Uncommitted');
                 return {
                     id: p.id, name: p.name, dateInvited: time, status: status, commitmentLabel: commitmentLabel, clutchFactor: status === 'Completed' ? p.clutchFactor : '-', fitScore: status === 'Completed' ? p.fitScore : '-', position: p.position, graduationYear: p.graduationYear, isYourInvite: rng() > 0.5, isArchived: rng() > 0.90
                 };
@@ -990,6 +990,11 @@
                 comparisonSelection: new Set(),
                 isComparisonModalOpen: false,
                 selectedTeam: 'Baseball',
+                statsLabView: 'insights',
+                statsFindings: [],
+                statsLoading: false,
+                statsChatMessages: [],
+                statsChatSessionId: 'stats-' + Date.now(),
             }
         };
 
@@ -999,6 +1004,7 @@
                 state.view = view;
                 state.searchQuery = '';
                 state.ui.comparisonSelection.clear();
+                if (view === 'stats') actions.loadFindings();
                 if (view === 'recruiting') {
                     state.sort = { field: 'clutchFactor', direction: 'desc' };
                 }
@@ -1172,7 +1178,14 @@
                 e.stopPropagation();
                 const invite = state.invites.find(i => i.id === id);
                 if (invite) invite.commitmentLabel = label;
+                const player = state.players.find(p => p.id === id);
+                if (player) player.commitmentLabel = label;
                 render();
+                fetch('/api/update-commitment', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ playerId: id, commitmentLabel: label }),
+                }).catch(() => {});
             },
             // COHORT ACTIONS
             setCohortGuideTab: (tab) => { state.ui.activeCohortGuideTab = tab; render(); },
@@ -1224,12 +1237,45 @@
                 state.ui.isComparisonModalOpen = false;
                 render();
             },
+            // STATS LAB ACTIONS
+            setStatsLabView: (view) => { state.ui.statsLabView = view; render(); },
+            loadFindings: async () => {
+                state.ui.statsLoading = true; render();
+                try {
+                    const res = await fetch('/api/findings');
+                    const data = await res.json();
+                    state.ui.statsFindings = data.findings || [];
+                } catch (e) { console.error('Failed to load findings:', e); }
+                state.ui.statsLoading = false; render();
+            },
+            runAnalysis: async () => {
+                state.ui.statsLoading = true; render();
+                try {
+                    await fetch('/api/run-analysis', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ trigger: 'manual' }) });
+                    await actions.loadFindings();
+                } catch (e) { console.error('Analysis failed:', e); }
+                state.ui.statsLoading = false; render();
+            },
+            sendStatsChat: async (message) => {
+                if (!message.trim()) return;
+                state.ui.statsChatMessages.push({ role: 'user', content: message });
+                render();
+                try {
+                    const res = await fetch('/api/stats-chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message, sessionId: state.ui.statsChatSessionId }) });
+                    const data = await res.json();
+                    state.ui.statsChatMessages.push({ role: 'assistant', content: data.message });
+                } catch (e) {
+                    state.ui.statsChatMessages.push({ role: 'assistant', content: 'Error connecting to statistician. Please try again.' });
+                }
+                render();
+            },
         };
 
         // --- RENDERERS ---
         function viewTitleForNav(view) {
             if (view === 'recruiting') return 'Recruiting Board';
             if (view === 'nterpret' || view === 'training') return 'Athlete Profiles';
+            if (view === 'stats') return 'Stats Lab';
             return 'Roster Insights';
         }
 
@@ -1280,6 +1326,7 @@
                                     <li><a class="dropdown-item ${state.view === 'nterpret' ? 'active' : ''}" href="#" onclick="event.preventDefault(); actions.setView('nterpret')">NTerpret Profile</a></li>
                                     <li><a class="dropdown-item ${state.view === 'training' ? 'active' : ''}" href="#" onclick="event.preventDefault(); actions.setView('training')">Development Plan</a></li>
                                     <li><a class="dropdown-item ${state.view === 'recruiting' ? 'active' : ''}" href="#" onclick="event.preventDefault(); actions.setView('recruiting')">Recruiting Board</a></li>
+                                    <li><a class="dropdown-item ${state.view === 'stats' ? 'active' : ''}" href="#" onclick="event.preventDefault(); actions.setView('stats')">Stats Lab</a></li>
                                 </ul>
                             </div>
                         </div>
@@ -3075,6 +3122,136 @@
             </div>`;
         }
 
+        // --- STATS LAB RENDERERS ---
+        function renderStatsLab() {
+            const view = state.ui.statsLabView;
+            const findings = state.ui.statsFindings || [];
+            let html = `
+            <div class="d-flex gap-2 mb-4">
+                <button onclick="actions.setStatsLabView('insights')" class="btn btn-sm ${view === 'insights' ? 'btn-dark' : 'btn-outline-secondary'}">Insights</button>
+                <button onclick="actions.setStatsLabView('weekly')" class="btn btn-sm ${view === 'weekly' ? 'btn-dark' : 'btn-outline-secondary'}">Weekly Report</button>
+                <button onclick="actions.setStatsLabView('chat')" class="btn btn-sm ${view === 'chat' ? 'btn-dark' : 'btn-outline-secondary'}">Ask Statistician</button>
+                <button onclick="actions.setStatsLabView('entry')" class="btn btn-sm ${view === 'entry' ? 'btn-dark' : 'btn-outline-secondary'}">Log Game Data</button>
+                <div class="ms-auto">
+                    <button onclick="actions.runAnalysis()" class="btn btn-sm btn-primary" ${state.ui.statsLoading ? 'disabled' : ''}>
+                        ${state.ui.statsLoading ? 'Analyzing...' : 'Run Analysis'}
+                    </button>
+                </div>
+            </div>`;
+            if (view === 'insights') html += renderInsightsDashboard(findings);
+            else if (view === 'weekly') html += renderWeeklyReport(findings);
+            else if (view === 'chat') html += renderStatsChat();
+            else if (view === 'entry') html += renderGameDataEntry();
+            return html;
+        }
+
+        function renderInsightsDashboard(findings) {
+            if (findings.length === 0) {
+                return '<div class="text-center py-5 text-secondary"><p class="mb-2">No findings yet.</p><p class="small">Click "Run Analysis" after game data is loaded.</p></div>';
+            }
+            return findings.map(f => {
+                const confColor = f.confidence_label === 'High' ? '#16a34a' : f.confidence_label === 'Medium' ? '#d97706' : '#9ca3af';
+                const trendIcon = f.trend === 'strengthening' ? '&#9650;' : f.trend === 'weakening' ? '&#9660;' : f.trend === 'new' ? '&#9733;' : '&#8212;';
+                const trendColor = f.trend === 'strengthening' ? '#16a34a' : f.trend === 'weakening' ? '#dc2626' : '#6b7280';
+                return `<div class="border rounded-3 p-3 mb-3" style="border-left: 4px solid ${confColor} !important;">
+                    <div class="d-flex justify-content-between align-items-start mb-2">
+                        <h6 class="fw-bold mb-0">${f.title}</h6>
+                        <div class="d-flex gap-2 align-items-center">
+                            <span style="color:${trendColor}; font-size:0.8em;">${trendIcon} ${f.trend}</span>
+                            <span class="badge" style="background:${confColor}; color:white; font-size:0.7em;">${f.confidence_label}</span>
+                        </div>
+                    </div>
+                    <p class="text-secondary small mb-2">${f.summary || 'Computing summary...'}</p>
+                    <div class="d-flex gap-3 small text-secondary">
+                        <span>Sample: ${f.data_points} data points</span>
+                        <span>Effect: ${f.effect_size ? Number(f.effect_size).toFixed(3) : 'N/A'}</span>
+                        <span>p: ${f.p_value ? Number(f.p_value).toFixed(4) : 'N/A'}</span>
+                    </div>
+                    <details class="mt-2"><summary class="small text-primary" style="cursor:pointer;">Show methodology</summary>
+                        <div class="small text-secondary mt-1 p-2 bg-light rounded">${f.methodology || ''}</div>
+                    </details>
+                </div>`;
+            }).join('');
+        }
+
+        function renderWeeklyReport(findings) {
+            if (findings.length === 0) return '<p class="text-secondary text-center py-5">No report available yet. Run an analysis first.</p>';
+            const grouped = {};
+            findings.forEach(f => { if (!grouped[f.finding_type]) grouped[f.finding_type] = []; grouped[f.finding_type].push(f); });
+            return `<div class="mb-3"><h5 class="fw-bold">Weekly Statistical Report</h5><p class="text-secondary small">Last computed: ${findings[0]?.computed_at ? new Date(findings[0].computed_at).toLocaleDateString() : 'N/A'}</p></div>` +
+                Object.entries(grouped).map(([type, fs]) => `<div class="mb-4"><h6 class="fw-semibold text-capitalize">${type.replace(/_/g, ' ')}</h6>${fs.map(f => `<div class="border-start border-3 ps-3 mb-2 ${f.confidence_label === 'High' ? 'border-success' : f.confidence_label === 'Medium' ? 'border-warning' : 'border-secondary'}"><p class="small mb-1"><strong>${f.title}</strong> <span class="badge bg-light text-dark">${f.confidence_label}</span></p><p class="small text-secondary mb-0">${f.summary || ''}</p></div>`).join('')}</div>`).join('');
+        }
+
+        function renderStatsChat() {
+            const messages = state.ui.statsChatMessages || [];
+            return `<div style="height: 400px; overflow-y: auto; border: 1px solid #e5e7eb; border-radius: 8px; padding: 16px; margin-bottom: 12px;" id="stats-chat-messages">
+                ${messages.length === 0 ? '<p class="text-secondary small">Ask a question about your team\'s statistical findings...</p>' : ''}
+                ${messages.map(m => `<div class="mb-3 ${m.role === 'user' ? 'text-end' : ''}"><div class="d-inline-block p-2 rounded-3 small" style="max-width: 80%; background: ${m.role === 'user' ? '#eff6ff' : '#f3f4f6'};">${m.content}</div></div>`).join('')}
+            </div>
+            <div class="d-flex gap-2">
+                <input type="text" id="stats-chat-input" class="form-control form-control-sm" placeholder="e.g. Does clutch factor predict close-game performance?" onkeydown="if(event.key==='Enter'){actions.sendStatsChat(this.value);this.value='';}" />
+                <button class="btn btn-sm btn-primary" onclick="const el=document.getElementById('stats-chat-input');actions.sendStatsChat(el.value);el.value='';">Send</button>
+            </div>`;
+        }
+
+        function renderGameDataEntry() {
+            const rosterPlayers = state.players.filter(p => p.type === 'ROSTER').slice(0, 12);
+            return `<div class="mb-3"><h5 class="fw-bold">Log Game Data</h5><p class="text-secondary small">Enter results from a recent game. Stats will be analyzed automatically.</p></div>
+            <div class="row g-2 mb-3">
+                <div class="col-md-3"><label class="form-label small">Date</label><input type="date" class="form-control form-control-sm" id="gd-date" /></div>
+                <div class="col-md-3"><label class="form-label small">Opponent</label><input type="text" class="form-control form-control-sm" id="gd-opponent" /></div>
+                <div class="col-md-3"><label class="form-label small">Home/Away</label><select class="form-select form-select-sm" id="gd-homeaway"><option>Home</option><option>Away</option></select></div>
+                <div class="col-md-1"><label class="form-label small">Us</label><input type="number" class="form-control form-control-sm" id="gd-team-score" min="0" /></div>
+                <div class="col-md-1"><label class="form-label small">Them</label><input type="number" class="form-control form-control-sm" id="gd-opp-score" min="0" /></div>
+            </div>
+            <h6 class="fw-semibold small">Player Stats</h6>
+            <div class="table-responsive"><table class="table table-sm small">
+                <thead><tr><th>Player</th><th>AB</th><th>H</th><th>RBI</th><th>K</th><th>BB</th><th>E</th><th>Note</th></tr></thead>
+                <tbody>${rosterPlayers.map(p => `<tr>
+                    <td class="fw-medium">${formatDisplayName(p)}</td>
+                    <td><input type="number" class="form-control form-control-sm" style="width:50px" min="0" id="gd-ab-${p.id}" /></td>
+                    <td><input type="number" class="form-control form-control-sm" style="width:50px" min="0" id="gd-h-${p.id}" /></td>
+                    <td><input type="number" class="form-control form-control-sm" style="width:50px" min="0" id="gd-rbi-${p.id}" /></td>
+                    <td><input type="number" class="form-control form-control-sm" style="width:50px" min="0" id="gd-k-${p.id}" /></td>
+                    <td><input type="number" class="form-control form-control-sm" style="width:50px" min="0" id="gd-bb-${p.id}" /></td>
+                    <td><input type="number" class="form-control form-control-sm" style="width:50px" min="0" id="gd-e-${p.id}" /></td>
+                    <td><input type="text" class="form-control form-control-sm" style="width:120px" id="gd-note-${p.id}" /></td>
+                </tr>`).join('')}</tbody>
+            </table></div>
+            <button class="btn btn-primary btn-sm" onclick="submitGameData()">Submit Game Data</button>`;
+        }
+
+        async function submitGameData() {
+            const date = document.getElementById('gd-date').value;
+            const opponent = document.getElementById('gd-opponent').value;
+            const homeAway = document.getElementById('gd-homeaway').value;
+            const teamScore = parseInt(document.getElementById('gd-team-score').value) || 0;
+            const oppScore = parseInt(document.getElementById('gd-opp-score').value) || 0;
+            if (!date) { alert('Please enter a game date'); return; }
+            const gameLogs = [];
+            state.players.filter(p => p.type === 'ROSTER').slice(0, 12).forEach(p => {
+                const ab = parseInt(document.getElementById('gd-ab-' + p.id)?.value) || 0;
+                if (ab === 0) return;
+                gameLogs.push({
+                    playerId: p.id, gameDate: date, opponent, homeAway, teamScore, opponentScore: oppScore,
+                    result: teamScore > oppScore ? 'W' : 'L',
+                    atBats: ab,
+                    hits: parseInt(document.getElementById('gd-h-' + p.id)?.value) || 0,
+                    rbis: parseInt(document.getElementById('gd-rbi-' + p.id)?.value) || 0,
+                    strikeouts: parseInt(document.getElementById('gd-k-' + p.id)?.value) || 0,
+                    walks: parseInt(document.getElementById('gd-bb-' + p.id)?.value) || 0,
+                    errors: parseInt(document.getElementById('gd-e-' + p.id)?.value) || 0,
+                    coachNote: document.getElementById('gd-note-' + p.id)?.value || null,
+                });
+            });
+            if (gameLogs.length === 0) { alert('Enter at-bats for at least one player'); return; }
+            try {
+                await fetch('/api/game-logs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ gameLogs }) });
+                alert('Game data saved! Running post-game analysis...');
+                await actions.runAnalysis();
+            } catch (e) { alert('Error saving game data'); }
+        }
+
         // --- MAIN RENDER ---
         function render() {
             window.render = render;
@@ -3280,6 +3457,7 @@
                 if (state.view === 'alignment') viewTitle = 'Coach Alignment & Culture Matrix';
                 if (state.view === 'recruiting') viewTitle = 'Recruiting Board';
                 if (state.view === 'training') viewTitle = 'Athlete Development Plan';
+                if (state.view === 'stats') viewTitle = 'Stats Lab';
                
                 // Build Main Content
                 let mainContent;
@@ -3336,6 +3514,8 @@
                             </div>
                         </div>
                     `;
+                } else if (state.view === 'stats') {
+                    mainContent = renderStatsLab();
                 } else {
                     // Home (Roster Assessment)
                     mainContent = `
