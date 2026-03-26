@@ -59,9 +59,18 @@ module.exports = async function handler(req, res) {
         motivation      TEXT,
         type            TEXT,
         round           TEXT,
+        commitment_label TEXT DEFAULT 'Uncommitted',
         metadata        JSONB DEFAULT '{}',
         updated_at      TIMESTAMPTZ DEFAULT NOW()
       )
+    `;
+
+    // Add commitment_label column if migrating from an existing table
+    await sql`
+      DO $$ BEGIN
+        ALTER TABLE players ADD COLUMN IF NOT EXISTS commitment_label TEXT DEFAULT 'Uncommitted';
+      EXCEPTION WHEN duplicate_column THEN NULL;
+      END $$
     `;
 
     await sql`
@@ -84,6 +93,92 @@ module.exports = async function handler(req, res) {
         player_name   TEXT,
         note          TEXT NOT NULL,
         created_at    TIMESTAMPTZ DEFAULT NOW()
+      )
+    `;
+
+    // === STATISTICIAN AGENT TABLES ===
+
+    await sql`
+      CREATE TABLE IF NOT EXISTS game_logs (
+        id              SERIAL PRIMARY KEY,
+        player_id       TEXT NOT NULL REFERENCES players(id),
+        game_date       DATE NOT NULL,
+        opponent        TEXT,
+        home_away       TEXT,
+        team_score      INT,
+        opponent_score  INT,
+        result          TEXT,
+        is_close_game   BOOLEAN DEFAULT false,
+        is_conference   BOOLEAN DEFAULT false,
+        is_tournament   BOOLEAN DEFAULT false,
+        at_bats         INT DEFAULT 0,
+        hits            INT DEFAULT 0,
+        rbis            INT DEFAULT 0,
+        errors          INT DEFAULT 0,
+        strikeouts      INT DEFAULT 0,
+        walks           INT DEFAULT 0,
+        coach_note      TEXT,
+        created_at      TIMESTAMPTZ DEFAULT NOW()
+      )
+    `;
+
+    await sql`CREATE INDEX IF NOT EXISTS idx_gl_player_date ON game_logs (player_id, game_date)`;
+    await sql`CREATE INDEX IF NOT EXISTS idx_gl_date ON game_logs (game_date)`;
+    await sql`CREATE INDEX IF NOT EXISTS idx_gl_close ON game_logs (is_close_game)`;
+
+    await sql`
+      CREATE TABLE IF NOT EXISTS recruiting_outcomes (
+        id              SERIAL PRIMARY KEY,
+        player_id       TEXT NOT NULL REFERENCES players(id),
+        signing_date    DATE,
+        playing_time_yr1 TEXT,
+        playing_time_yr2 TEXT,
+        still_on_team   BOOLEAN DEFAULT true,
+        entered_portal  BOOLEAN DEFAULT false,
+        portal_date     DATE,
+        created_at      TIMESTAMPTZ DEFAULT NOW()
+      )
+    `;
+
+    await sql`CREATE INDEX IF NOT EXISTS idx_ro_player ON recruiting_outcomes (player_id)`;
+
+    await sql`
+      CREATE TABLE IF NOT EXISTS stat_findings (
+        id                  SERIAL PRIMARY KEY,
+        finding_type        TEXT NOT NULL,
+        title               TEXT NOT NULL,
+        summary             TEXT,
+        methodology         TEXT,
+        sql_query           TEXT,
+        result_data         JSONB DEFAULT '{}',
+        data_points         INT DEFAULT 0,
+        confidence          INT DEFAULT 0,
+        confidence_label    TEXT DEFAULT 'Low',
+        effect_size         FLOAT,
+        p_value             FLOAT,
+        confidence_interval JSONB,
+        is_significant      BOOLEAN DEFAULT false,
+        trend               TEXT DEFAULT 'new',
+        coach_feedback      TEXT,
+        computed_at         TIMESTAMPTZ DEFAULT NOW(),
+        superseded_by       INT,
+        analysis_run_id     INT
+      )
+    `;
+
+    await sql`CREATE INDEX IF NOT EXISTS idx_sf_type ON stat_findings (finding_type)`;
+    await sql`CREATE INDEX IF NOT EXISTS idx_sf_current ON stat_findings (superseded_by) WHERE superseded_by IS NULL`;
+
+    await sql`
+      CREATE TABLE IF NOT EXISTS analysis_runs (
+        id                  SERIAL PRIMARY KEY,
+        trigger             TEXT NOT NULL,
+        started_at          TIMESTAMPTZ DEFAULT NOW(),
+        completed_at        TIMESTAMPTZ,
+        games_analyzed      INT DEFAULT 0,
+        findings_generated  INT DEFAULT 0,
+        findings_changed    INT DEFAULT 0,
+        status              TEXT DEFAULT 'running'
       )
     `;
 
