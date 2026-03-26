@@ -231,11 +231,13 @@ module.exports = async function handler(req, res) {
       await sql`TRUNCATE analysis_runs RESTART IDENTITY`;
 
       const gameLogs = generateGameLogs(allPlayers, { seed: 42 });
-      for (const g of gameLogs) {
-        await sql`
+      // Insert in concurrent batches of 25 to speed up seeding
+      for (let i = 0; i < gameLogs.length; i += 25) {
+        const batch = gameLogs.slice(i, i + 25);
+        await Promise.all(batch.map(g => sql`
           INSERT INTO game_logs (player_id, game_date, opponent, home_away, team_score, opponent_score, result, is_close_game, is_conference, is_tournament, at_bats, hits, rbis, errors, strikeouts, walks, coach_note)
           VALUES (${g.player_id}, ${g.game_date}, ${g.opponent}, ${g.home_away}, ${g.team_score}, ${g.opponent_score}, ${g.result}, ${g.is_close_game}, ${g.is_conference}, ${g.is_tournament}, ${g.at_bats}, ${g.hits}, ${g.rbis}, ${g.errors}, ${g.strikeouts}, ${g.walks}, ${g.coach_note})
-        `;
+        `));
       }
       gameLogsSeeded = gameLogs.length;
 
