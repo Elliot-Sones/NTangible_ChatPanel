@@ -214,10 +214,47 @@ module.exports = async function handler(req, res) {
       `;
     }
 
+    // === SEED MOCK GAME DATA ===
+    const { generateGameLogs, generateRecruitingOutcomes } = require('../lib/mock/game-data');
+
+    // Fetch all players from DB to generate mock data
+    const allPlayers = await sql`SELECT id, name, position, level, type, clutch_factor, fit_score, comm_style FROM players`;
+
+    let gameLogsSeeded = 0;
+    let recruitingOutcomesSeeded = 0;
+
+    if (allPlayers.length > 0) {
+      // Clear existing mock data
+      await sql`TRUNCATE game_logs RESTART IDENTITY`;
+      await sql`TRUNCATE recruiting_outcomes RESTART IDENTITY`;
+      await sql`TRUNCATE stat_findings RESTART IDENTITY`;
+      await sql`TRUNCATE analysis_runs RESTART IDENTITY`;
+
+      const gameLogs = generateGameLogs(allPlayers, { seed: 42 });
+      for (const g of gameLogs) {
+        await sql`
+          INSERT INTO game_logs (player_id, game_date, opponent, home_away, team_score, opponent_score, result, is_close_game, is_conference, is_tournament, at_bats, hits, rbis, errors, strikeouts, walks, coach_note)
+          VALUES (${g.player_id}, ${g.game_date}, ${g.opponent}, ${g.home_away}, ${g.team_score}, ${g.opponent_score}, ${g.result}, ${g.is_close_game}, ${g.is_conference}, ${g.is_tournament}, ${g.at_bats}, ${g.hits}, ${g.rbis}, ${g.errors}, ${g.strikeouts}, ${g.walks}, ${g.coach_note})
+        `;
+      }
+      gameLogsSeeded = gameLogs.length;
+
+      const outcomes = generateRecruitingOutcomes(allPlayers, { seed: 42 });
+      for (const o of outcomes) {
+        await sql`
+          INSERT INTO recruiting_outcomes (player_id, signing_date, playing_time_yr1, playing_time_yr2, still_on_team, entered_portal, portal_date)
+          VALUES (${o.player_id}, ${o.signing_date}, ${o.playing_time_yr1}, ${o.playing_time_yr2}, ${o.still_on_team}, ${o.entered_portal}, ${o.portal_date})
+        `;
+      }
+      recruitingOutcomesSeeded = outcomes.length;
+    }
+
     return res.status(200).json({
       success: true,
       chunksInserted: knowledgeChunks.length,
       chunksEmbedded: allEmbeddings.length,
+      gameLogsSeeded,
+      recruitingOutcomesSeeded,
     });
   } catch (error) {
     console.error('Seed error:', error);
